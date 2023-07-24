@@ -22,9 +22,9 @@ GT honor code violation.
   		  	   		  		 			  		 			 	 	 		 		 	
 -----do not edit anything above this line---  		  	   		  		 			  		 			 	 	 		 		 	
   		  	   		  		 			  		 			 	 	 		 		 	
-Student Name: Tucker Balch (replace with your name)  		  	   		  		 			  		 			 	 	 		 		 	
-GT User ID: tb34 (replace with your User ID)  		  	   		  		 			  		 			 	 	 		 		 	
-GT ID: 900897987 (replace with your GT ID)  		  	   		  		 			  		 			 	 	 		 		 	
+Student Name: Devansh Panirwala (replace with your name)  		  	   		  		 			  		 			 	 	 		 		 	
+GT User ID: dpanirwala3 (replace with your User ID)  		  	   		  		 			  		 			 	 	 		 		 	
+GT ID: 903262441 (replace with your GT ID)  		  	   		  		 			  		 			 	 	 		 		 	
 """
 
 
@@ -33,20 +33,15 @@ GT ID: 900897987 (replace with your GT ID)
 import datetime as dt
 import random
 import pandas as pd
+import numpy as np
 import util as ut
+import random
+import BagLearner as bal
+import RTLearner as rtl
+from indicators import bollingerbands, PriceSMA, MACD
+from datetime import datetime, timedelta
+from util import get_data
 class StrategyLearner(object):
-    """  		  	   		  		 			  		 			 	 	 		 		 	
-    A strategy learner that can learn a trading policy using the same indicators used in ManualStrategy.  		  	   		  		 			  		 			 	 	 		 		 	
-
-    :param verbose: If “verbose” is True, your code can print out information for debugging.  		  	   		  		 			  		 			 	 	 		 		 	
-        If verbose = False your code should not generate ANY output.  		  	   		  		 			  		 			 	 	 		 		 	
-    :type verbose: bool  		  	   		  		 			  		 			 	 	 		 		 	
-    :param impact: The market impact of each transaction, defaults to 0.0  		  	   		  		 			  		 			 	 	 		 		 	
-    :type impact: float  		  	   		  		 			  		 			 	 	 		 		 	
-    :param commission: The commission amount charged, defaults to 0.0  		  	   		  		 			  		 			 	 	 		 		 	
-    :type commission: float  		  	   		  		 			  		 			 	 	 		 		 	
-    """
-    # constructor
 
     def __init__(self, verbose=False, impact=0.0, commission=0.0):
         """  		  	   		  		 			  		 			 	 	 		 		 	
@@ -55,8 +50,46 @@ class StrategyLearner(object):
         self.verbose = verbose
         self.impact = impact
         self.commission = commission
+        self.learner = bal.BagLearner(learner=rtl.RTLearner, verbose=False, kwargs={
+            "leaf_size": 5}, bags=40, boost=False)
 
-    # this method should create a QLearner, and train it for trading
+    def author(self):
+        return 'dpanirwala3'
+
+    def calculate_yval(self, price):
+        return (price.shift(-10) - price) / price
+
+    def calculate_mean_std(self, ydata):
+        # Calculate mean and StdDev of ydata
+        mean = ydata.mean()
+        std = ydata.std()
+        return mean, std
+
+    def calculate_buy_limit_sell_limit(self, mean, std):
+        # Calculate buy_limit and sell_limit based on mean and StdDev
+        buy_limit = mean + std * 0.5
+        sell_limit = mean - std * 0.5
+        return buy_limit, sell_limit
+
+    def create_train_dataframe(self, price, sd, ed, symbol, lookback, impact):
+        ydata = self.calculate_yval(price)
+        train = pd.concat([
+            price,
+            bollingerbands(sd, ed, symbol, window_size=lookback),
+            MACD(sd, ed, symbol),
+            PriceSMA(sd, ed, symbol, window_size=lookback),
+            ydata
+        ], axis=1)
+        train.columns = [symbol, 'bbp', 'MACD_Ratio', 'PriceOverSMA', 'Ydata']
+        mean, std = self.calculate_mean_std(ydata)
+        buy_limit, sell_limit = self.calculate_buy_limit_sell_limit(mean, std)
+        train['Y'] = np.select([
+            (train['Ydata'] - impact > buy_limit),
+            (train['Ydata'] + impact < sell_limit)
+        ], [1, -1], default=0)
+        train.dropna(axis=0, how='any', inplace=True)
+        return train.iloc[:, 0:-2].values, train.iloc[:, -1].values
+
     def add_evidence(
         self,
         symbol="IBM",
@@ -64,85 +97,68 @@ class StrategyLearner(object):
         ed=dt.datetime(2009, 1, 1),
         sv=10000,
     ):
-        """  		  	   		  		 			  		 			 	 	 		 		 	
-        Trains your strategy learner over a given time frame.  		  	   		  		 			  		 			 	 	 		 		 	
+        lookback = 20
+        new_sd = sd - dt.timedelta(days=lookback+15)
+        df = get_data([symbol], pd.date_range(new_sd, ed))
+        price = df[symbol]
+        price = price.loc[sd:ed]
 
-        :param symbol: The stock symbol to train on  		  	   		  		 			  		 			 	 	 		 		 	
-        :type symbol: str  		  	   		  		 			  		 			 	 	 		 		 	
-        :param sd: A datetime object that represents the start date, defaults to 1/1/2008  		  	   		  		 			  		 			 	 	 		 		 	
-        :type sd: datetime  		  	   		  		 			  		 			 	 	 		 		 	
-        :param ed: A datetime object that represents the end date, defaults to 1/1/2009  		  	   		  		 			  		 			 	 	 		 		 	
-        :type ed: datetime  		  	   		  		 			  		 			 	 	 		 		 	
-        :param sv: The starting value of the portfolio  		  	   		  		 			  		 			 	 	 		 		 	
-        :type sv: int  		  	   		  		 			  		 			 	 	 		 		 	
-        """
+        # print price
 
-        # add your code to do learning here
+        train = pd.concat(
+            [price,
+             bollingerbands(sd, ed, symbol, window_size=lookback),
+             MACD(sd, ed, symbol),
+             PriceSMA(sd, ed, symbol, window_size=lookback),
+             self.calculate_yval(price)], axis=1)
+        trainX, trainY = self.create_train_dataframe(
+            price, sd, ed, symbol, lookback, self.impact)
 
-        # example usage of the old backward compatible util function
-        syms = [symbol]
-        dates = pd.date_range(sd, ed)
-        prices_all = ut.get_data(syms, dates)  # automatically adds SPY
-        prices = prices_all[syms]  # only portfolio symbols
-        prices_SPY = prices_all["SPY"]  # only SPY, for comparison later
-        if self.verbose:
-            print(prices)
+        self.learner.add_evidence(trainX, trainY)
 
-        # example use with new colname
-        volume_all = ut.get_data(
-            syms, dates, colname="Volume"
-        )  # automatically adds SPY
-        volume = volume_all[syms]  # only portfolio symbols
-        volume_SPY = volume_all["SPY"]  # only SPY, for comparison later
-        if self.verbose:
-            print(volume)
+    def testPolicy(self, symbol="IBM",
+                   sd=dt.datetime(2009, 1, 1),
+                   ed=dt.datetime(2010, 1, 1),
+                   sv=10000):
 
-    # this method should use the existing policy and test it against new data
-    def testPolicy(
-        self,
-        symbol="IBM",
-        sd=dt.datetime(2009, 1, 1),
-        ed=dt.datetime(2010, 1, 1),
-        sv=10000,
-    ):
-        """  		  	   		  		 			  		 			 	 	 		 		 	
-        Tests your learner using data outside of the training data  		  	   		  		 			  		 			 	 	 		 		 	
+        lookback = 20
+        sym = [symbol]
+        new_sd = sd - timedelta(days=lookback+15)
+        df = get_data([symbol], pd.date_range(new_sd, ed))
+        price = df[symbol]
+        price = price.loc[sd:ed]
+        testX = pd.concat([price,
+                           bollingerbands(
+                               sd, ed, symbol, window_size=lookback),
+                           MACD(sd, ed, symbol),
+                           PriceSMA(sd, ed, symbol, window_size=lookback)], axis=1)
+        testX.columns = [symbol, 'bbp', 'MACD_Ratio', 'PriceOverSMA']
 
-        :param symbol: The stock symbol that you trained on on  		  	   		  		 			  		 			 	 	 		 		 	
-        :type symbol: str  		  	   		  		 			  		 			 	 	 		 		 	
-        :param sd: A datetime object that represents the start date, defaults to 1/1/2008  		  	   		  		 			  		 			 	 	 		 		 	
-        :type sd: datetime  		  	   		  		 			  		 			 	 	 		 		 	
-        :param ed: A datetime object that represents the end date, defaults to 1/1/2009  		  	   		  		 			  		 			 	 	 		 		 	
-        :type ed: datetime  		  	   		  		 			  		 			 	 	 		 		 	
-        :param sv: The starting value of the portfolio  		  	   		  		 			  		 			 	 	 		 		 	
-        :type sv: int  		  	   		  		 			  		 			 	 	 		 		 	
-        :return: A DataFrame with values representing trades for each day. Legal values are +1000.0 indicating  		  	   		  		 			  		 			 	 	 		 		 	
-            a BUY of 1000 shares, -1000.0 indicating a SELL of 1000 shares, and 0.0 indicating NOTHING.  		  	   		  		 			  		 			 	 	 		 		 	
-            Values of +2000 and -2000 for trades are also legal when switching from long to short or short to  		  	   		  		 			  		 			 	 	 		 		 	
-            long so long as net holdings are constrained to -1000, 0, and 1000.  		  	   		  		 			  		 			 	 	 		 		 	
-        :rtype: pandas.DataFrame  		  	   		  		 			  		 			 	 	 		 		 	
-        """
+        testX = testX.values
 
-        # here we build a fake set of trades
-        # your code should return the same sort of data
-        dates = pd.date_range(sd, ed)
-        prices_all = ut.get_data([symbol], dates)  # automatically adds SPY
-        trades = prices_all[[symbol,]]  # only portfolio symbols
-        trades_SPY = prices_all["SPY"]  # only SPY, for comparison later
-        trades.values[:, :] = 0  # set them all to nothing
-        trades.values[0, :] = 1000  # add a BUY at the start
-        trades.values[40, :] = -1000  # add a SELL
-        trades.values[41, :] = 1000  # add a BUY
-        trades.values[60, :] = -2000  # go short from long
-        trades.values[61, :] = 2000  # go long from short
-        trades.values[-1, :] = -1000  # exit on the last day
-        if self.verbose:
-            print(type(trades))  # it better be a DataFrame!
-        if self.verbose:
-            print(trades)
-        if self.verbose:
-            print(prices_all)
+        queryY = self.learner.query(testX)
+        df_dates = df[sym].loc[sd:ed]
+        trades = df_dates.copy()
+        trades.ix[:] = 0.0
+        cashBalance = 0
+        trade_actions = {
+            1.0: {0: (1000, 1000), 1000: (0, 0), -1000: (2000, 2000)},
+            -1.0: {0: (-1000, -1000), -1000: (0, 0), 1000: (-2000, -2000)},
+        }
+        for i in range(df_dates.shape[0] - 1):
+            action = queryY[i]
+
+            if action in trade_actions:
+                if cashBalance in trade_actions[action]:
+                    trade_value, balance_update = trade_actions[action][cashBalance]
+                    trades.ix[i, symbol] = trade_value
+                    cashBalance += balance_update
+
         return trades
+
+
+def author():
+    return 'dpanirwala3'
 
 
 if __name__ == "__main__":
